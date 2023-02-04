@@ -2,18 +2,24 @@
 #include <EEPROM.h>
 #include <IRremote.hpp>
 #include "ESPAsyncWebServer.h"
+#include "DHT.h"
+#include "ArduinoJson.h"
+#include "AsyncJson.h"
 
-#define BUTTON_PIN 15
-#define IR_RECEIVE_PIN 26
-#define SENDING_REPEATS 0
-#define IR_SEND_PIN 4
+#define DHTPIN 4
+#define DHTTYPE DHT11
+
+#define IR_RECEIVE_PIN 15
+#define SENDING_REPEATS 1
+#define IR_SEND_PIN 5
 #define ENABLE_LED_FEEDBACK false
 
 IPAddress staticIP(192, 168, 4, 1);
-
 IPAddress gateway(192, 168, 0, 1);
 IPAddress subnet(255, 255, 0, 0);
 IPAddress dns(192, 168, 1, 1);
+
+DHT dht(DHTPIN, DHTTYPE);
 
 int ledpin = 2;
 const int buffer_size = 100;
@@ -21,11 +27,11 @@ char recieved_codes[buffer_size];
 char str[50];
 char code_word[10] = "command:";
 int char_index = 0;
+bool enableConfig = false;
 
-bool enableConfig = true;
-// the credentials of your home wifi
-const char *ssid = "TP-LINK_734704";
-const char *password = "01527551";
+// // the credentials of your home wifi
+// const char *ssid = "TP-LINK_734704";
+// const char *password = "01527551";
 
 int param_index = 0;
 // struct to save button parameters
@@ -37,7 +43,6 @@ struct settings
   char up[10];
   char down[10];
   char swing[10];
-
 } user_settings = {};
 
 // Create AsyncWebServer object on port 80
@@ -49,12 +54,13 @@ void send_message(const char message[])
   Serial.print("Sending code:");
   Serial.println(message);
 
-  // the receiver has to be disabled to send messages
-  IrReceiver.stop();
+  // // // the receiver has to be disabled to send messages
+  // IrReceiver.stop();
 
   IrSender.sendNECRaw(code, SENDING_REPEATS);
 
-  // restarts the reciever
+  // // restarts the reciever
+
   IrReceiver.start();
 }
 void check_recieved()
@@ -99,6 +105,7 @@ void check_recieved()
           EEPROM.put(0, user_settings);
           EEPROM.commit();
           Serial.println("remote parameters has been saved on EEPROM memory ");
+          enableConfig = false;
           break;
 
         default:
@@ -110,12 +117,31 @@ void check_recieved()
     IrReceiver.resume(); // Enable receiving of the next value
   }
 }
+String readTemperature()
+{
+  // Read temperature as Celsius (the default)
+  float t = dht.readTemperature();
+  Serial.print(F(" Temperature: "));
+  Serial.print(t);
+  Serial.println(F("°C "));
+  return String(t);
+}
+String readHumidity()
+{
+  float h = dht.readHumidity();
+  Serial.print(F("Humidity: "));
+  Serial.print(h);
+  Serial.println(F("% "));
+
+  return String(h);
+}
 void setup()
 {
   pinMode(ledpin, OUTPUT);
   Serial.begin(115200);
   Serial.println();
   Serial.println("Air_Conditioner_Remote");
+  dht.begin();
   IrReceiver.begin(IR_RECEIVE_PIN, ENABLE_LED_FEEDBACK, USE_DEFAULT_FEEDBACK_LED_PIN);
   IrSender.begin(IR_SEND_PIN, ENABLE_LED_FEEDBACK);
   // get user settings from EEPROM memory
@@ -135,32 +161,62 @@ void setup()
   // {
   //   Serial.println("Configuration failed.");
   // }
-  // print hardcoded wifi credentials
-  Serial.println("Wifi SSID: " + String(ssid) + " Wifi Password: " + password);
-  // start wifi communication
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  // trying to connect to Wifi if not start soft access point
-  byte tries = 0;
+
+  // // print hardcoded wifi credentials
+  // Serial.println("Wifi SSID: " + String(ssid) + " Wifi Password: " + password);
+  // // start wifi communication
+  // WiFi.mode(WIFI_STA);
+  // WiFi.begin(ssid, password);
+  // // trying to connect to Wifi if not start soft access point
+  // byte tries = 0;
+  // while (WiFi.status() != WL_CONNECTED)
+  // {
+  //   delay(1000);
+  //   if (tries++ > 10)
+  //   {
+  //     WiFi.mode(WIFI_AP);
+  //     Serial.println("Can't connect to Wifi: " + String(ssid));
+  //     Serial.println("incorrect credentials");
+  //     break;
+  //   }
+  // }
+  // // if connected to WiFi print IP address and start UDP
+  // if (WiFi.status() == WL_CONNECTED)
+  // {
+  //   Serial.print("Connected to :");
+  //   Serial.println(WiFi.SSID()); // Tell us what network we're connected to
+  //   IPAddress ip = WiFi.localIP();
+  //   Serial.printf("Now listening at IP %s", ip.toString().c_str());
+  // }
+
+  // Init WiFi as Station, start SmartConfig
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.beginSmartConfig();
+
+  // Wait for SmartConfig packet from mobile
+  Serial.println("Waiting for SmartConfig.");
+  while (!WiFi.smartConfigDone())
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("SmartConfig received.");
+
+  // Wait for WiFi to connect to AP
+  Serial.println("Waiting for WiFi");
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(1000);
-    if (tries++ > 10)
-    {
-      WiFi.mode(WIFI_AP);
-      Serial.println("Can't connect to Wifi: " + String(ssid));
-      Serial.println("incorrect credentials");
-      break;
-    }
+    delay(500);
+    Serial.print(".");
   }
-  // if connected to WiFi print IP address and start UDP
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    Serial.print("Connected to :");
-    Serial.println(WiFi.SSID()); // Tell us what network we're connected to
-    IPAddress ip = WiFi.localIP();
-    Serial.printf("Now listening at IP %s", ip.toString().c_str());
-  }
+
+  Serial.println("WiFi Connected.");
+
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
   // turn on configuration
   server.on("/onconfig", HTTP_GET, [](AsyncWebServerRequest *request)
             { 
@@ -202,7 +258,16 @@ void setup()
             { 
               send_message(user_settings.swing);
               request->send(200, "application/json", "{\"message\":\"set swing mode\"}"); });
+  server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
+            {
+    StaticJsonDocument<200> data;
 
+    data["temperature"] = readTemperature();
+    data["humidity"] = readHumidity();  
+
+    String response;
+    serializeJson(data, response);
+    request->send(200, "application/json", response); });
   // Start server
   server.begin();
 }
@@ -211,6 +276,7 @@ void loop()
 {
   if (enableConfig && param_index < 6)
     check_recieved();
-
-  delay(100);
+  // readHumidity();
+  // readTemperature();
+  delay(10);
 }
